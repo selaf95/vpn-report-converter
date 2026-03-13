@@ -4,13 +4,14 @@ import re
 from io import StringIO, BytesIO
 from datetime import datetime
 from fpdf import FPDF
+from openpyxl.utils import get_column_letter # Para el autoajuste
 import os
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Sophos VPN Reporter", page_icon="🛡️")
 st.title("🛡️ Generador de Reportes VPN")
 
-# --- CLASE PDF (ESTÉTICA) ---
+# --- CLASE PDF ---
 class CustomPDF(FPDF):
     def __init__(self, metadata):
         super().__init__()
@@ -22,12 +23,10 @@ class CustomPDF(FPDF):
                 self.image("logo.jpg", x=10, y=8, w=30)
             except:
                 pass
-        
         self.set_y(20)
         self.set_font("helvetica", "B", 26)
         self.cell(0, 15, "System events", align="L", new_x="LMARGIN", new_y="NEXT")
         self.set_font("helvetica", "", 12)
-        
         start = str(self.metadata.get('Start Date', ''))
         end = str(self.metadata.get('End Date', ''))
         self.cell(0, 10, f"{start} - {end}", align="L", new_x="LMARGIN", new_y="NEXT")
@@ -46,7 +45,7 @@ def procesar_datos(uploaded_file):
         content = uploaded_file.getvalue().decode("utf-8")
     except:
         content = uploaded_file.getvalue().decode("latin-1")
-        
+    
     lines = content.splitlines()
     metadata = {}
     
@@ -101,35 +100,42 @@ if archivo:
     df_f, df_a, meta = procesar_datos(archivo)
     
     if meta:
-        # --- LÓGICA DE NOMBRE DE ARCHIVO DINÁMICO ---
         serial = meta.get("Appliance Key", "SERIAL")
-        # Extraer solo la fecha YYYY-MM-DD
         try:
             d_start = pd.to_datetime(meta.get("Start Date")).strftime("%Y-%m-%d")
             d_end = pd.to_datetime(meta.get("End Date")).strftime("%Y-%m-%d")
         except:
-            d_start = "FECHA"
-            d_end = "FECHA"
+            d_start, d_end = "FECHA", "FECHA"
 
-        if d_start == d_end:
-            nombre_base = f"Reporte_VPN_{serial}_{d_start}"
-        else:
-            nombre_base = f"Reporte_VPN_{serial}_{d_start}_{d_end}"
+        nombre_base = f"Reporte_VPN_{serial}_{d_start}" if d_start == d_end else f"Reporte_VPN_{serial}_{d_start}_{d_end}"
 
         st.success(f"✅ Reporte generado: {nombre_base}")
         
-        # EXCEL
+        # --- EXCEL CON AUTOAJUSTE ---
         output_excel = BytesIO()
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+            # Guardar hojas
             df_f.to_excel(writer, index=False, sheet_name='Completadas')
             df_a.to_excel(writer, index=False, sheet_name='Conexiones Activas')
-        
-        # PDF
+            
+            # Aplicar autoajuste a cada hoja
+            for sheet_name in writer.sheets:
+                ws = writer.sheets[sheet_name]
+                for col in ws.columns:
+                    max_length = 0
+                    column = col[0].column_letter
+                    for cell in col:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except: pass
+                    adjusted_width = (max_length + 4)
+                    ws.column_dimensions[column].width = adjusted_width
+
+        # --- GENERACIÓN PDF ---
         try:
             pdf = CustomPDF(meta)
             pdf.add_page()
-            
-            # Info Superior
             pdf.set_font("helvetica", "", 10)
             pdf.cell(0, 7, f"Appliance: {meta.get('Appliance', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
             pdf.cell(0, 7, f"Appliance key: {serial}", new_x="LMARGIN", new_y="NEXT")
