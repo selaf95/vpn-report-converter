@@ -5,10 +5,10 @@ from io import StringIO, BytesIO
 from datetime import datetime
 from fpdf import FPDF
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment # Para centrar en Excel
+from openpyxl.styles import Alignment
 import os
 
-# --- CLASE PDF MEJORADA ---
+# --- CLASE PDF OPTIMIZADA ---
 class CustomPDF(FPDF):
     def __init__(self, metadata):
         super().__init__()
@@ -34,7 +34,6 @@ class CustomPDF(FPDF):
         clean_f = f"Server time: {server_t}".encode('ascii', 'ignore').decode('ascii')
         self.cell(0, 10, clean_f, align='R')
 
-# --- PROCESAMIENTO ---
 def procesar_datos(uploaded_file):
     try:
         content = uploaded_file.getvalue().decode("utf-8")
@@ -80,7 +79,7 @@ def procesar_datos(uploaded_file):
         for t in pila: actv.append({'Usuario': usuario, 'Inicio': t, 'Estado': 'Conectado'})
     return pd.DataFrame(conex), pd.DataFrame(actv), metadata
 
-# --- INTERFAZ STREAMLIT ---
+# --- INTERFAZ ---
 st.set_page_config(page_title="Sophos VPN Reporter", page_icon="🛡️")
 st.title("🛡️ Generador de Reportes VPN")
 archivo = st.file_uploader("Subir CSV de Sophos", type="csv")
@@ -95,7 +94,7 @@ if archivo:
         except: d_s, d_e = "FECHA", "FECHA"
         nombre = f"Reporte_VPN_{serial}_{d_s}" if d_s == d_e else f"Reporte_VPN_{serial}_{d_s}_{d_e}"
 
-        # --- EXCEL (AUTOAJUSTE + CENTRADO) ---
+        # --- EXCEL (CENTRADO + AUTOAJUSTE) ---
         out_xl = BytesIO()
         with pd.ExcelWriter(out_xl, engine='openpyxl') as writer:
             df_f.to_excel(writer, index=False, sheet_name='Completadas')
@@ -105,41 +104,41 @@ if archivo:
                 for col in ws.columns:
                     max_len = 0
                     for cell in col:
-                        cell.alignment = Alignment(horizontal='center', vertical='center') # CENTRADO
-                        try:
-                            if len(str(cell.value)) > max_len: max_len = len(str(cell.value))
-                        except: pass
+                        cell.alignment = Alignment(horizontal='center', vertical='center')
+                        if cell.value:
+                            max_len = max(max_len, len(str(cell.value)))
                     ws.column_dimensions[col[0].column_letter].width = max_len + 5
 
-        # --- PDF (ANCHO ADAPTABLE) ---
+        # --- PDF (AJUSTE DE TABLAS) ---
         try:
             pdf = CustomPDF(meta)
             pdf.add_page()
             pdf.set_font("helvetica", "", 10)
             for k, label in [('Appliance', 'Appliance'), ('Appliance Key', 'Appliance key'), ('Firmware Version', 'Firmware Version'), ('Criteria', 'Filter(s) applied')]:
-                pdf.cell(0, 7, f"{label}: {meta.get(k if k != 'Appliance Key' else 'Appliance Key', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 7, f"{label}: {meta.get(k, 'N/A')}", new_x="LMARGIN", new_y="NEXT")
             
             pdf.ln(5)
             pdf.set_font("helvetica", "B", 12); pdf.cell(0, 10, "Conexiones completadas", new_x="LMARGIN", new_y="NEXT")
             
-            # Encabezados PDF con Usuario más ancho (60 en vez de 45)
+            # Encabezados
             pdf.set_font("helvetica", "B", 9)
-            pdf.cell(60, 8, "Usuario", border=1, align="C")
-            pdf.cell(40, 8, "Inicio", border=1, align="C")
-            pdf.cell(40, 8, "Fin", border=1, align="C")
-            pdf.cell(50, 8, "Duración", border=1, align="C")
+            col_widths = [60, 40, 40, 50]
+            headers = ["Usuario", "Inicio", "Fin", "Duración"]
+            for w, h in zip(col_widths, headers):
+                pdf.cell(w, 8, h, border=1, align="C")
             pdf.ln()
             
+            # Datos con manejo de altura dinámica para evitar saltos de hoja raros
             pdf.set_font("helvetica", "", 8)
             for _, r in df_f.iterrows():
                 u = str(r["Usuario"]).encode('ascii', 'ignore').decode('ascii')
-                # Usamos multi_cell para el usuario si es muy largo
-                x, y = pdf.get_x(), pdf.get_y()
-                pdf.multi_cell(60, 7, u, border=1, align="L")
-                pdf.set_xy(x + 60, y)
-                pdf.cell(40, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-                pdf.cell(40, 7, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-                pdf.cell(50, 7, str(r["Duración"]), border=1, align="C")
+                # Calculamos altura necesaria
+                line_height = 7
+                # Si el texto es muy largo, multi_cell lo dividirá
+                pdf.cell(col_widths[0], line_height, u, border=1)
+                pdf.cell(col_widths[1], line_height, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
+                pdf.cell(col_widths[2], line_height, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
+                pdf.cell(col_widths[3], line_height, str(r["Duración"]), border=1, align="C")
                 pdf.ln()
 
             if not df_a.empty:
