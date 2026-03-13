@@ -77,7 +77,7 @@ def procesar_datos(uploaded_file):
     df[['Usuario', 'Accion']] = df['Message'].apply(extraer_usuario_accion).apply(pd.Series)
     df = df.dropna(subset=['Usuario', 'Accion']).sort_values(by=['Usuario', 'Time'])
 
-    conexiones, abiertas = [], []
+    conexiones, activas = [], []
     for usuario, grupo in df.groupby('Usuario'):
         pila = []
         for _, fila in grupo.iterrows():
@@ -90,13 +90,9 @@ def procesar_datos(uploaded_file):
                     'Duración': str(fila['Time'] - inicio).split('.')[0]
                 })
         for t in pila:
-            abiertas.append({
-                'Usuario': usuario, 
-                'Inicio': t, 
-                'Estado': 'Sesión Abierta (Sin desconexión)'
-            })
+            activas.append({'Usuario': usuario, 'Inicio': t, 'Estado': 'Conectado'})
 
-    return pd.DataFrame(conexiones), pd.DataFrame(abiertas), metadata
+    return pd.DataFrame(conexiones), pd.DataFrame(activas), metadata
 
 # --- INTERFAZ ---
 archivo = st.file_uploader("Subir CSV de Sophos", type="csv")
@@ -105,28 +101,43 @@ if archivo:
     df_f, df_a, meta = procesar_datos(archivo)
     
     if meta:
-        st.success("✅ Reporte generado")
+        # --- LÓGICA DE NOMBRE DE ARCHIVO DINÁMICO ---
+        serial = meta.get("Appliance Key", "SERIAL")
+        # Extraer solo la fecha YYYY-MM-DD
+        try:
+            d_start = pd.to_datetime(meta.get("Start Date")).strftime("%Y-%m-%d")
+            d_end = pd.to_datetime(meta.get("End Date")).strftime("%Y-%m-%d")
+        except:
+            d_start = "FECHA"
+            d_end = "FECHA"
+
+        if d_start == d_end:
+            nombre_base = f"Reporte_VPN_{serial}_{d_start}"
+        else:
+            nombre_base = f"Reporte_VPN_{serial}_{d_start}_{d_end}"
+
+        st.success(f"✅ Reporte generado: {nombre_base}")
         
         # EXCEL
         output_excel = BytesIO()
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             df_f.to_excel(writer, index=False, sheet_name='Completadas')
-            df_a.to_excel(writer, index=False, sheet_name='Abiertas')
+            df_a.to_excel(writer, index=False, sheet_name='Conexiones Activas')
         
         # PDF
         try:
             pdf = CustomPDF(meta)
             pdf.add_page()
             
-            # Bloque de Información Superior
+            # Info Superior
             pdf.set_font("helvetica", "", 10)
             pdf.cell(0, 7, f"Appliance: {meta.get('Appliance', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
-            pdf.cell(0, 7, f"Appliance key: {meta.get('Appliance Key', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Appliance key: {serial}", new_x="LMARGIN", new_y="NEXT")
             pdf.cell(0, 7, f"Firmware Version: {meta.get('Firmware Version', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
             pdf.cell(0, 7, f"Filter(s) applied: {meta.get('Criteria', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(5)
 
-            # --- TABLA 1: CONEXIONES COMPLETADAS ---
+            # Tabla Conexiones Completadas
             pdf.set_font("helvetica", "B", 12)
             pdf.cell(0, 10, "Conexiones completadas", new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("helvetica", "B", 9)
@@ -143,11 +154,11 @@ if archivo:
                 pdf.cell(45, 7, str(r["Duración"]), border=1, align="C")
                 pdf.ln()
 
-            # --- TABLA 2: SESIONES ABIERTAS ---
+            # Tabla Conexiones Activas
             if not df_a.empty:
                 pdf.ln(10)
                 pdf.set_font("helvetica", "B", 12)
-                pdf.cell(0, 10, "Sesiones actualmente abiertas", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 10, "Conexiones activas", new_x="LMARGIN", new_y="NEXT")
                 pdf.set_font("helvetica", "B", 9)
                 pdf.cell(60, 8, "Usuario", border=1, align="C")
                 pdf.cell(60, 8, "Inicio de Sesión", border=1, align="C")
@@ -159,17 +170,17 @@ if archivo:
                     u = str(r["Usuario"]).encode('ascii', 'ignore').decode('ascii')
                     pdf.cell(60, 7, u, border=1)
                     pdf.cell(60, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-                    pdf.cell(60, 7, "Abierta", border=1, align="C")
+                    pdf.cell(60, 7, "Conectado", border=1, align="C")
                     pdf.ln()
 
             pdf_data = pdf.output()
             
             col1, col2 = st.columns(2)
             with col1:
-                st.download_button("📥 Descargar en Excel", output_excel.getvalue(), "Reporte_VPN.xlsx")
+                st.download_button("📥 Descargar en Excel", output_excel.getvalue(), f"{nombre_base}.xlsx")
             with col2:
-                st.download_button("📄 Descargar en PDF", bytes(pdf_data), "Reporte_VPN.pdf")
+                st.download_button("📄 Descargar en PDF", bytes(pdf_data), f"{nombre_base}.pdf")
 
         except Exception as e:
             st.error(f"Error en PDF: {e}")
-            st.download_button("📥 Descargar Excel", output_excel.getvalue(), "Reporte_VPN.xlsx")
+            st.download_button("📥 Descargar Excel", output_excel.getvalue(), f"{nombre_base}.xlsx")
