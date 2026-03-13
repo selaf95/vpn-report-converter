@@ -7,6 +7,7 @@ from fpdf import FPDF
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
 from openpyxl import load_workbook
+import os
 
 # --- CLASE PDF PERSONALIZADA ---
 class CustomPDF(FPDF):
@@ -15,14 +16,12 @@ class CustomPDF(FPDF):
         self.metadata = metadata
 
     def header(self):
-        # Intenta cargar el logo si existe en el repo
-        try:
+        # Verifica si el logo existe antes de intentar ponerlo
+        if os.path.exists("logo.jpg"):
             self.image("logo.jpg", x=10, y=8, w=30)
-        except:
-            pass 
         
         self.set_y(20)
-        self.set_font("Arial", "B", 26)
+        self.set_font("Arial", "B", 24)
         self.cell(0, 15, "System events", ln=True, align="L")
         self.set_font("Arial", "", 12)
         start = self.metadata.get('Start Date', '')
@@ -33,10 +32,16 @@ class CustomPDF(FPDF):
     def footer(self):
         self.set_y(-25)
         self.set_font("Arial", "I", 8)
-        self.cell(0, 10, f"Server time: {self.metadata.get('Server Time')}", 0, 0, 'R')
+        server_t = self.metadata.get('Server Time', '')
+        self.cell(0, 10, f"Server time: {server_t}", 0, 0, 'R')
 
 def procesar_datos(uploaded_file):
-    stringio = StringIO(uploaded_file.getvalue().decode("utf-8"))
+    try:
+        content = uploaded_file.getvalue().decode("utf-8")
+    except UnicodeDecodeError:
+        content = uploaded_file.getvalue().decode("latin-1")
+        
+    stringio = StringIO(content)
     lines = stringio.readlines()
 
     metadata = {}
@@ -68,7 +73,6 @@ def procesar_datos(uploaded_file):
     df[['Usuario', 'Accion']] = df['Message'].apply(extraer_usuario_accion).apply(pd.Series)
     df = df.dropna(subset=['Usuario', 'Accion']).sort_values(by=['Usuario', 'Time'])
 
-    # --- LÓGICA DE FUSIÓN DE SESIONES ---
     server_time = pd.to_datetime(metadata.get("Server Time"), errors="coerce")
     if pd.isna(server_time): server_time = datetime.now()
 
@@ -82,7 +86,7 @@ def procesar_datos(uploaded_file):
                 eventos.append({'Inicio': pila.pop(0), 'Fin': fila['Time']})
         
         for t in pila:
-            abiertas.append({'Usuario': usuario, 'Inicio': t, 'Fin': server_time, 'Duración': str(server_time - t), 'Estado': 'Sesión abierta'})
+            abiertas.append({'Usuario': usuario, 'Inicio': t, 'Fin': server_time, 'Duracion': str(server_time - t).split('.')[0], 'Estado': 'Abierta'})
 
         if eventos:
             eventos.sort(key=lambda x: x['Inicio'])
@@ -93,7 +97,7 @@ def procesar_datos(uploaded_file):
                 else:
                     temp_fusion.append(e)
             for s in temp_fusion:
-                fusionadas.append({'Usuario': usuario, 'Inicio': s['Inicio'], 'Fin': s['Fin'], 'Duración': str(s['Fin'] - s['Inicio'])})
+                fusionadas.append({'Usuario': usuario, 'Inicio': s['Inicio'], 'Fin': s['Fin'], 'Duracion': str(s['Fin'] - s['Inicio']).split('.')[0]})
 
     return pd.DataFrame(fusionadas), pd.DataFrame(abiertas), metadata
 
@@ -107,48 +111,59 @@ if uploaded_file:
     df_f, df_a, meta = procesar_datos(uploaded_file)
     
     if meta:
-        # 1. GENERAR EXCEL
+        # 1. EXCEL
         excel_out = BytesIO()
         with pd.ExcelWriter(excel_out, engine="openpyxl") as writer:
             df_f.to_excel(writer, sheet_name="Completadas", index=False)
             df_a.to_excel(writer, sheet_name="Abiertas", index=False)
         excel_out.seek(0)
 
-        # 2. GENERAR PDF ESTÉTICO
-        pdf = CustomPDF(meta)
-        pdf.add_page()
-        pdf.set_font("Arial", size=10)
-        for k in ['Appliance', 'Appliance Key', 'Firmware Version', 'Criteria']:
-            pdf.cell(0, 7, f"{k}: {meta.get(k, 'N/A')}", ln=True)
-        
-        pdf.ln(5)
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 10, "Conexiones completadas", ln=True)
-        pdf.set_font("Arial", "B", 9)
-        cols = [("Usuario", 40), ("Inicio", 45), ("Fin", 45), ("Duración", 55)]
-        for c, w in cols: pdf.cell(w, 8, c, border=1, align="C")
-        pdf.ln()
-        pdf.set_font("Arial", "", 8)
-        for _, r in df_f.iterrows():
-            pdf.cell(40, 7, str(r["Usuario"]), border=1)
-            pdf.cell(45, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-            pdf.cell(45, 7, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-            pdf.cell(55, 7, str(r["Duración"]), border=1, align="C")
+        # 2. PDF (Manejando errores de caracteres)
+        try:
+            pdf = CustomPDF(meta)
+            pdf.add_page()
+            pdf.set_font("Arial", size=10)
+            for k in ['Appliance', 'Appliance Key', 'Firmware Version', 'Criteria']:
+                text = f"{k}: {meta.get(k, 'N/A')}".encode('latin-1', 'replace').decode('latin-1')
+                pdf.cell(0, 7, text, ln=True)
+            
+            pdf.ln(5)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "Conexiones completadas", ln=True)
+            pdf.set_font("Arial", "B", 9)
+            
+            # Tabla encabezados
+            pdf.cell(40, 8, "Usuario", border=1, align="C")
+            pdf.cell(45, 8, "Inicio", border=1, align="C")
+            pdf.cell(45, 8, "Fin", border=1, align="C")
+            pdf.cell(55, 8, "Duracion", border=1, align="C")
             pdf.ln()
+            
+            pdf.set_font("Arial", "", 8)
+            for _, r in df_f.iterrows():
+                u = str(r["Usuario"]).encode('latin-1', 'replace').decode('latin-1')
+                pdf.cell(40, 7, u, border=1)
+                pdf.cell(45, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
+                pdf.cell(45, 7, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
+                pdf.cell(55, 7, str(r["Duracion"]), border=1, align="C")
+                pdf.ln()
 
-        pdf_out = pdf.output(dest='S').encode('latin-1')
+            pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
+            
+            # --- NOMBRE DINÁMICO ---
+            serial = meta.get("Appliance Key", "Serial")
+            s_date = pd.to_datetime(meta.get("Start Date")).strftime("%Y-%m-%d")
+            e_date = pd.to_datetime(meta.get("End Date")).strftime("%Y-%m-%d")
+            name_base = f"{serial}_{s_date}" if s_date == e_date else f"{serial}_{s_date}_{e_date}"
 
-        # --- LÓGICA DE NOMBRE ---
-        serial = meta.get("Appliance Key", "Serial")
-        s_date = pd.to_datetime(meta.get("Start Date")).strftime("%Y-%m-%d")
-        e_date = pd.to_datetime(meta.get("End Date")).strftime("%Y-%m-%d")
-        name_base = f"{serial}_{s_date}" if s_date == e_date else f"{serial}_{s_date}_{e_date}"
-
-        # --- BOTONES DE DESCARGA ---
-        col1, col2 = st.columns(2)
-        with col1:
-            st.download_button("📥 Descargar Excel", excel_out, f"Reporte_VPN_{name_base}.xlsx")
-        with col2:
-            st.download_button("📄 Descargar PDF Estético", pdf_out, f"Reporte_VPN_{name_base}.pdf")
-        
-        st.success(f"Reporte listo para: {name_base}")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button("📥 Descargar Excel", excel_out, f"Reporte_VPN_{name_base}.xlsx")
+            with col2:
+                st.download_button("📄 Descargar PDF Estético", pdf_bytes, f"Reporte_VPN_{name_base}.pdf")
+            
+            st.success(f"Procesado: {name_base}")
+            
+        except Exception as e:
+            st.error(f"Error generando el PDF: {e}")
+            st.download_button("📥 Solo Descargar Excel", excel_out, "Reporte_VPN.xlsx")
