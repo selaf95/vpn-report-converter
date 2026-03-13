@@ -16,24 +16,31 @@ class CustomPDF(FPDF):
         self.metadata = metadata
 
     def header(self):
-        # Verifica si el logo existe antes de intentar ponerlo
+        # El logo debe llamarse logo.jpg en tu GitHub
         if os.path.exists("logo.jpg"):
-            self.image("logo.jpg", x=10, y=8, w=30)
+            try:
+                self.image("logo.jpg", x=10, y=8, w=30)
+            except:
+                pass
         
         self.set_y(20)
         self.set_font("Arial", "B", 24)
+        # Limpiamos caracteres extraños para evitar errores en PDF
         self.cell(0, 15, "System events", ln=True, align="L")
         self.set_font("Arial", "", 12)
-        start = self.metadata.get('Start Date', '')
-        end = self.metadata.get('End Date', '')
+        
+        start = str(self.metadata.get('Start Date', ''))
+        end = str(self.metadata.get('End Date', ''))
         self.cell(0, 10, f"{start} - {end}", ln=True, align="L")
         self.ln(5)
 
     def footer(self):
         self.set_y(-25)
         self.set_font("Arial", "I", 8)
-        server_t = self.metadata.get('Server Time', '')
-        self.cell(0, 10, f"Server time: {server_t}", 0, 0, 'R')
+        server_t = str(self.metadata.get('Server Time', ''))
+        # Limpieza ASCII para el footer
+        clean_footer = f"Server time: {server_t}".encode('ascii', 'ignore').decode('ascii')
+        self.cell(0, 10, clean_footer, 0, 0, 'R')
 
 def procesar_datos(uploaded_file):
     try:
@@ -103,67 +110,83 @@ def procesar_datos(uploaded_file):
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Sophos VPN Reporter", layout="wide")
-st.title("📊 Sophos VPN Report Generator")
+st.title("🛡️ Sophos VPN Report Generator")
 
-uploaded_file = st.file_uploader("Subir CSV de System Events", type="csv")
+uploaded_file = st.file_uploader("Subir archivo CSV de Sophos", type="csv")
 
 if uploaded_file:
-    df_f, df_a, meta = procesar_datos(uploaded_file)
+    with st.spinner('Procesando datos...'):
+        df_f, df_a, meta = procesar_datos(uploaded_file)
     
     if meta:
-        # 1. EXCEL
+        # 1. GENERACIÓN DE EXCEL
         excel_out = BytesIO()
         with pd.ExcelWriter(excel_out, engine="openpyxl") as writer:
             df_f.to_excel(writer, sheet_name="Completadas", index=False)
             df_a.to_excel(writer, sheet_name="Abiertas", index=False)
         excel_out.seek(0)
 
-        # 2. PDF (Manejando errores de caracteres)
+        # 2. GENERACIÓN DE PDF (Seguro contra caracteres especiales)
         try:
             pdf = CustomPDF(meta)
             pdf.add_page()
             pdf.set_font("Arial", size=10)
+            
+            # Datos del equipo (Limpios de caracteres no-ASCII)
             for k in ['Appliance', 'Appliance Key', 'Firmware Version', 'Criteria']:
-                text = f"{k}: {meta.get(k, 'N/A')}".encode('latin-1', 'replace').decode('latin-1')
-                pdf.cell(0, 7, text, ln=True)
+                clean_val = str(meta.get(k, 'N/A')).encode('ascii', 'ignore').decode('ascii')
+                pdf.cell(0, 7, f"{k}: {clean_val}", ln=True)
             
             pdf.ln(5)
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 10, "Conexiones completadas", ln=True)
-            pdf.set_font("Arial", "B", 9)
             
-            # Tabla encabezados
-            pdf.cell(40, 8, "Usuario", border=1, align="C")
+            # Encabezados tabla
+            pdf.set_font("Arial", "B", 9)
+            pdf.cell(45, 8, "Usuario", border=1, align="C")
             pdf.cell(45, 8, "Inicio", border=1, align="C")
             pdf.cell(45, 8, "Fin", border=1, align="C")
-            pdf.cell(55, 8, "Duracion", border=1, align="C")
+            pdf.cell(45, 8, "Duracion", border=1, align="C")
             pdf.ln()
             
+            # Filas de la tabla
             pdf.set_font("Arial", "", 8)
             for _, r in df_f.iterrows():
-                u = str(r["Usuario"]).encode('latin-1', 'replace').decode('latin-1')
-                pdf.cell(40, 7, u, border=1)
+                # Forzamos nombre de usuario a ASCII para evitar errores de FPDF
+                u_clean = str(r["Usuario"]).encode('ascii', 'ignore').decode('ascii')
+                pdf.cell(45, 7, u_clean, border=1)
                 pdf.cell(45, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
                 pdf.cell(45, 7, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-                pdf.cell(55, 7, str(r["Duracion"]), border=1, align="C")
+                pdf.cell(45, 7, str(r["Duracion"]), border=1, align="C")
                 pdf.ln()
 
-            pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
-            
-            # --- NOMBRE DINÁMICO ---
+            # Salida del PDF a bytes
+            pdf_bytes = pdf.output(dest='S')
+            if isinstance(pdf_bytes, str):
+                pdf_bytes = pdf_bytes.encode('latin-1', 'replace')
+
+            # --- LÓGICA DE NOMBRE DINÁMICO ---
             serial = meta.get("Appliance Key", "Serial")
-            s_date = pd.to_datetime(meta.get("Start Date")).strftime("%Y-%m-%d")
-            e_date = pd.to_datetime(meta.get("End Date")).strftime("%Y-%m-%d")
+            try:
+                s_date = pd.to_datetime(meta.get("Start Date")).strftime("%Y-%m-%d")
+                e_date = pd.to_datetime(meta.get("End Date")).strftime("%Y-%m-%d")
+            except:
+                s_date = "Fecha"
+                e_date = "Fecha"
+                
             name_base = f"{serial}_{s_date}" if s_date == e_date else f"{serial}_{s_date}_{e_date}"
 
-            col1, col2 = st.columns(2)
-            with col1:
+            # --- BOTONES ---
+            st.success(f"✅ Reporte generado para el Serial: {serial}")
+            c1, c2 = st.columns(2)
+            with c1:
                 st.download_button("📥 Descargar Excel", excel_out, f"Reporte_VPN_{name_base}.xlsx")
-            with col2:
+            with c2:
                 st.download_button("📄 Descargar PDF Estético", pdf_bytes, f"Reporte_VPN_{name_base}.pdf")
-            
-            st.success(f"Procesado: {name_base}")
-            
+                
         except Exception as e:
-            st.error(f"Error generando el PDF: {e}")
-            st.download_button("📥 Solo Descargar Excel", excel_out, "Reporte_VPN.xlsx")
+            st.error(f"Error técnico en PDF: {e}")
+            st.info("Puedes descargar el Excel mientras corregimos el PDF.")
+            st.download_button("📥 Descargar Excel (Alternativo)", excel_out, "Reporte_VPN.xlsx")
+    else:
+        st.error("No se pudo extraer información del archivo. Verifica que sea un CSV válido de Sophos.")
