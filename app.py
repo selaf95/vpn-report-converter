@@ -17,7 +17,6 @@ class CustomPDF(FPDF):
         self.metadata = metadata
 
     def header(self):
-        # Logo: Intentar cargar logo.jpg
         if os.path.exists("logo.jpg"):
             try:
                 self.image("logo.jpg", x=10, y=8, w=30)
@@ -38,7 +37,6 @@ class CustomPDF(FPDF):
         self.set_y(-25)
         self.set_font("helvetica", "I", 8)
         server_t = str(self.metadata.get('Server Time', ''))
-        # Limpieza para evitar errores de caracteres
         clean_footer = f"Server time: {server_t}".encode('ascii', 'ignore').decode('ascii')
         self.cell(0, 10, clean_footer, align='R')
 
@@ -52,7 +50,6 @@ def procesar_datos(uploaded_file):
     lines = content.splitlines()
     metadata = {}
     
-    # Extraer metadatos (Logo/Info superior)
     for line in lines[:15]:
         parts = [p.strip().replace('"', '') for p in line.split(',')]
         if len(parts) >= 2:
@@ -66,7 +63,6 @@ def procesar_datos(uploaded_file):
             elif "Criteria" in key or (len(parts) > 1 and "Event Type is" in parts[1]): 
                 metadata["Criteria"] = val if "Criteria" not in key else parts[1]
 
-    # Encontrar inicio de tabla
     data_start = next((i for i, line in enumerate(lines) if "Time,Event Type,Severity,Message" in line), None)
     if data_start is None: return None, None, None
 
@@ -81,11 +77,7 @@ def procesar_datos(uploaded_file):
     df[['Usuario', 'Accion']] = df['Message'].apply(extraer_usuario_accion).apply(pd.Series)
     df = df.dropna(subset=['Usuario', 'Accion']).sort_values(by=['Usuario', 'Time'])
 
-    # Lógica de sesiones (Excel y PDF)
     conexiones, abiertas = [], []
-    server_time_str = metadata.get("Server Time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    st_dt = pd.to_datetime(server_time_str, errors='coerce')
-
     for usuario, grupo in df.groupby('Usuario'):
         pila = []
         for _, fila in grupo.iterrows():
@@ -98,59 +90,80 @@ def procesar_datos(uploaded_file):
                     'Duración': str(fila['Time'] - inicio).split('.')[0]
                 })
         for t in pila:
-            abiertas.append({'Usuario': usuario, 'Inicio': t, 'Estado': 'Sesión sin desconexión'})
+            abiertas.append({
+                'Usuario': usuario, 
+                'Inicio': t, 
+                'Estado': 'Sesión Abierta (Sin desconexión)'
+            })
 
     return pd.DataFrame(conexiones), pd.DataFrame(abiertas), metadata
 
-# --- INTERFAZ DE USUARIO ---
-archivo = st.file_uploader("Subir CSV de Sophos (System Events)", type="csv")
+# --- INTERFAZ ---
+archivo = st.file_uploader("Subir CSV de Sophos", type="csv")
 
 if archivo:
     df_f, df_a, meta = procesar_datos(archivo)
     
     if meta:
-        st.success("✅ Reporte generado exitosamente")
+        st.success("✅ Reporte generado")
         
-        # 1. BOTÓN EXCEL
+        # EXCEL
         output_excel = BytesIO()
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-            df_f.to_excel(writer, index=False, sheet_name='Conexiones')
-            df_a.to_excel(writer, index=False, sheet_name='Sesiones Abiertas')
+            df_f.to_excel(writer, index=False, sheet_name='Completadas')
+            df_a.to_excel(writer, index=False, sheet_name='Abiertas')
         
-        # 2. GENERACIÓN DE PDF
+        # PDF
         try:
             pdf = CustomPDF(meta)
             pdf.add_page()
             
-            # Info Superior
+            # Bloque de Información Superior
             pdf.set_font("helvetica", "", 10)
-            pdf.cell(0, 8, f"Appliance: {meta.get('Appliance', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
-            pdf.cell(0, 8, f"Appliance key: {meta.get('Appliance Key', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
-            pdf.cell(0, 8, f"Firmware Version: {meta.get('Firmware Version', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
-            pdf.cell(0, 8, f"Filter(s) applied: {meta.get('Criteria', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Appliance: {meta.get('Appliance', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Appliance key: {meta.get('Appliance Key', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Firmware Version: {meta.get('Firmware Version', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Filter(s) applied: {meta.get('Criteria', 'N/A')}", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(5)
 
-            # Tabla Conexiones
+            # --- TABLA 1: CONEXIONES COMPLETADAS ---
             pdf.set_font("helvetica", "B", 12)
             pdf.cell(0, 10, "Conexiones completadas", new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("helvetica", "B", 9)
-            headers = [("Usuario", 45), ("Inicio", 45), ("Fin", 45), ("Duración", 45)]
-            for h, w in headers: pdf.cell(w, 8, h, border=1, align="C")
+            for h, w in [("Usuario", 45), ("Inicio", 45), ("Fin", 45), ("Duración", 45)]:
+                pdf.cell(w, 8, h, border=1, align="C")
             pdf.ln()
             
             pdf.set_font("helvetica", "", 8)
             for _, r in df_f.iterrows():
-                u_clean = str(r["Usuario"]).encode('ascii', 'ignore').decode('ascii')
-                pdf.cell(45, 7, u_clean, border=1)
+                u = str(r["Usuario"]).encode('ascii', 'ignore').decode('ascii')
+                pdf.cell(45, 7, u, border=1)
                 pdf.cell(45, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
                 pdf.cell(45, 7, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
                 pdf.cell(45, 7, str(r["Duración"]), border=1, align="C")
                 pdf.ln()
 
-            # IMPORTANTE: Convertir a bytes de forma segura para Streamlit
+            # --- TABLA 2: SESIONES ABIERTAS ---
+            if not df_a.empty:
+                pdf.ln(10)
+                pdf.set_font("helvetica", "B", 12)
+                pdf.cell(0, 10, "Sesiones actualmente abiertas", new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font("helvetica", "B", 9)
+                pdf.cell(60, 8, "Usuario", border=1, align="C")
+                pdf.cell(60, 8, "Inicio de Sesión", border=1, align="C")
+                pdf.cell(60, 8, "Estado", border=1, align="C")
+                pdf.ln()
+                
+                pdf.set_font("helvetica", "", 8)
+                for _, r in df_a.iterrows():
+                    u = str(r["Usuario"]).encode('ascii', 'ignore').decode('ascii')
+                    pdf.cell(60, 7, u, border=1)
+                    pdf.cell(60, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
+                    pdf.cell(60, 7, "Abierta", border=1, align="C")
+                    pdf.ln()
+
             pdf_data = pdf.output()
             
-            # --- MOSTRAR BOTONES ---
             col1, col2 = st.columns(2)
             with col1:
                 st.download_button("📥 Descargar en Excel", output_excel.getvalue(), "Reporte_VPN.xlsx")
@@ -158,5 +171,5 @@ if archivo:
                 st.download_button("📄 Descargar en PDF", bytes(pdf_data), "Reporte_VPN.pdf")
 
         except Exception as e:
-            st.error(f"Error al crear el PDF: {e}")
-            st.download_button("📥 Descargar solo Excel", output_excel.getvalue(), "Reporte_VPN.xlsx")
+            st.error(f"Error en PDF: {e}")
+            st.download_button("📥 Descargar Excel", output_excel.getvalue(), "Reporte_VPN.xlsx")
