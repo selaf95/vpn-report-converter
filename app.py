@@ -14,12 +14,13 @@ def procesar_csv_web(uploaded_file):
 
     # --- Lógica de metadatos ---
     metadata = {}
-    for line in lines[:15]: # Ampliado un poco para asegurar capturar todo el header
+    for line in lines[:15]: 
         line_clean = line.strip().replace('"', "")
         if "," in line_clean:
             parts = line_clean.split(",", 1)
             key, value = parts[0].strip(), parts[1].strip()
             if "Start Date" in key: metadata["Start Date"] = value
+            elif "End Date" in key: metadata["End Date"] = value # Capturamos End Date
             elif "Server Time" in key: metadata["Server Time"] = value
             elif "Device Serial Number" in key: metadata["Appliance Key"] = value
 
@@ -91,7 +92,7 @@ def procesar_csv_web(uploaded_file):
         pd.DataFrame(sesiones_fusionadas).to_excel(writer, sheet_name="Conexiones completadas", index=False)
         pd.DataFrame(sesiones_abiertas).to_excel(writer, sheet_name="Conexiones abiertas", index=False)
 
-    # Ajustes de formato con Openpyxl
+    # Ajustes de formato
     output.seek(0)
     wb = load_workbook(output)
     for sheet_name in wb.sheetnames:
@@ -110,31 +111,40 @@ def procesar_csv_web(uploaded_file):
 # --- INTERFAZ DE STREAMLIT ---
 st.set_page_config(page_title="Analizador VPN Sophos", page_icon="🛡️")
 st.title("🛡️ Procesador de Reportes VPN Sophos")
-st.write("Sube tu archivo CSV para generar el reporte de conexiones en Excel.")
 
-uploaded_file = st.file_uploader("Arrastra tu archivo CSV aquí", type="csv")
+uploaded_file = st.file_uploader("Sube tu archivo CSV de Sophos", type="csv")
 
 if uploaded_file is not None:
-    with st.spinner('Procesando datos...'):
+    with st.spinner('Procesando...'):
         excel_data, meta = procesar_csv_web(uploaded_file)
         
         if excel_data:
-            # Extraer Serial directamente
             serial = meta.get("Appliance Key", "SIN_SERIAL")
             
-            # Formatear fecha (quitar horas y ceros)
-            fecha_raw = meta.get("Start Date", "Fecha_Desconocida")
-            try:
-                fecha_dt = pd.to_datetime(fecha_raw)
-                fecha_limpia = fecha_dt.strftime("%Y-%m-%d")
-            except:
-                fecha_limpia = str(fecha_raw).split(" ")[0].replace("/", "-")
+            # Formatear fechas
+            start_raw = meta.get("Start Date", "")
+            end_raw = meta.get("End Date", "")
             
-            # Nombre final del archivo
-            filename = f"Reporte_VPN_{serial}_{fecha_limpia}.xlsx"
+            try:
+                start_dt = pd.to_datetime(start_raw)
+                start_fmt = start_dt.strftime("%Y-%m-%d")
+            except:
+                start_fmt = str(start_raw).split(" ")[0].replace("/", "-")
+                
+            try:
+                end_dt = pd.to_datetime(end_raw)
+                end_fmt = end_dt.strftime("%Y-%m-%d")
+            except:
+                end_fmt = str(end_raw).split(" ")[0].replace("/", "-")
 
-            st.success(f"✅ Archivo procesado correctamente.")
-            st.info(f"**Serial:** {serial} | **Fecha:** {fecha_limpia}")
+            # --- Lógica de nombre de archivo ---
+            if start_fmt == end_fmt:
+                filename = f"Reporte_VPN_{serial}_{start_fmt}.xlsx"
+            else:
+                filename = f"Reporte_VPN_{serial}_{start_fmt}_{end_fmt}.xlsx"
+
+            st.success("✅ Archivo procesado")
+            st.info(f"**Archivo generado:** `{filename}`")
             
             st.download_button(
                 label="📥 Descargar Reporte Excel",
@@ -142,5 +152,3 @@ if uploaded_file is not None:
                 file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-        else:
-            st.error(f"Error al procesar: {meta}")
