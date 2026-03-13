@@ -7,21 +7,17 @@ from fpdf import FPDF
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
 from openpyxl import load_workbook
-import os
 
-# --- CLASE PDF CONFIGURADA PARA FPDF2 ---
+# --- CLASE PDF SIMPLIFICADA (SIN LOGO EXTERNO) ---
 class CustomPDF(FPDF):
     def __init__(self, metadata):
         super().__init__()
         self.metadata = metadata
 
     def header(self):
-        # Si el logo da problemas, el bloque try evita que la app muera
-        if os.path.exists("logo.jpg"):
-            try:
-                self.image("logo.jpg", x=10, y=8, w=30)
-            except Exception:
-                pass
+        # Dibujamos un rectángulo azul como "logo" temporal para que no falle buscando archivos
+        self.set_fill_color(0, 80, 158)
+        self.rect(10, 8, 30, 10, 'F')
         
         self.set_y(20)
         self.set_font("helvetica", "B", 24)
@@ -112,8 +108,7 @@ st.title("🛡️ Generador de Reportes VPN")
 archivo = st.file_uploader("Sube tu CSV de Sophos", type="csv")
 
 if archivo:
-    with st.spinner("Procesando datos..."):
-        df_f, df_a, meta = procesar_datos(archivo)
+    df_f, df_a, meta = procesar_datos(archivo)
     
     if meta:
         # EXCEL
@@ -123,8 +118,7 @@ if archivo:
             df_a.to_excel(writer, sheet_name="Abiertas", index=False)
         excel_out.seek(0)
 
-        # PDF con FPDF2
-        pdf_bytes = None
+        # PDF SEGURO
         try:
             pdf = CustomPDF(meta)
             pdf.add_page()
@@ -138,35 +132,28 @@ if archivo:
             pdf.cell(0, 10, "Conexiones completadas", new_x="LMARGIN", new_y="NEXT")
             
             pdf.set_font("helvetica", "B", 9)
-            cols = [("Usuario", 45), ("Inicio", 45), ("Fin", 45), ("Duracion", 45)]
-            for header, width in cols:
-                pdf.cell(width, 8, header, border=1, align="C")
+            for h in ["Usuario", "Inicio", "Fin", "Duracion"]:
+                pdf.cell(45, 8, h, border=1, align="C")
             pdf.ln()
             
             pdf.set_font("helvetica", "", 8)
             for _, r in df_f.iterrows():
                 u = str(r["Usuario"]).encode('ascii', 'ignore').decode('ascii')
                 pdf.cell(45, 7, u, border=1)
-                pdf.cell(45, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-                pdf.cell(45, 7, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1, align="C")
-                pdf.cell(45, 7, str(r["Duracion"]), border=1, align="C")
+                pdf.cell(45, 7, r["Inicio"].strftime("%Y-%m-%d %H:%M"), border=1)
+                pdf.cell(45, 7, r["Fin"].strftime("%Y-%m-%d %H:%M"), border=1)
+                pdf.cell(45, 7, str(r["Duracion"]), border=1)
                 pdf.ln()
 
             pdf_bytes = pdf.output()
-        except Exception as e:
-            st.warning(f"Nota: El PDF no se pudo generar con el diseño completo ({e}). El Excel está disponible.")
-
-        # Lógica de nombre
-        serial = meta.get("Appliance Key", "Serial")
-        s_date = str(meta.get("Start Date", "Inicio")).split(" ")[0]
-        e_date = str(meta.get("End Date", "Fin")).split(" ")[0]
-        name = f"{serial}_{s_date}" if s_date == e_date else f"{serial}_{s_date}_{e_date}"
-
-        st.success("✅ Reporte listo")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.download_button("📥 Descargar Excel", excel_out, f"Reporte_{name}.xlsx")
-        if pdf_bytes:
+            
+            st.success("✅ Reporte generado")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button("📥 Excel", excel_out, "Reporte.xlsx")
             with c2:
-                st.download_button("📄 Descargar PDF", pdf_bytes, f"Reporte_{name}.pdf")
-        st.error("No se pudo extraer información del archivo. Verifica que sea un CSV válido de Sophos.")
+                st.download_button("📄 PDF", pdf_bytes, "Reporte.pdf")
+                
+        except Exception as e:
+            st.error(f"Error en PDF: {e}")
+            st.download_button("📥 Descargar solo Excel", excel_out, "Reporte.xlsx")
