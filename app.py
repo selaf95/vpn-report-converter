@@ -14,17 +14,16 @@ def procesar_csv_web(uploaded_file):
 
     # --- Lógica de metadatos ---
     metadata = {}
-    for line in lines[:11]:
+    for line in lines[:15]: # Ampliado un poco para asegurar capturar todo el header
         line_clean = line.strip().replace('"', "")
         if "," in line_clean:
             parts = line_clean.split(",", 1)
             key, value = parts[0].strip(), parts[1].strip()
             if "Start Date" in key: metadata["Start Date"] = value
-            elif "End Date" in key: metadata["End Date"] = value
             elif "Server Time" in key: metadata["Server Time"] = value
             elif "Device Serial Number" in key: metadata["Appliance Key"] = value
 
-    # --- Encontrar encabezado ---
+    # --- Encontrar encabezado de datos ---
     data_start = None
     for i, line in enumerate(lines):
         if line.strip().startswith("Time,Event Type,Severity,Message"):
@@ -92,7 +91,7 @@ def procesar_csv_web(uploaded_file):
         pd.DataFrame(sesiones_fusionadas).to_excel(writer, sheet_name="Conexiones completadas", index=False)
         pd.DataFrame(sesiones_abiertas).to_excel(writer, sheet_name="Conexiones abiertas", index=False)
 
-    # Ajustes de formato
+    # Ajustes de formato con Openpyxl
     output.seek(0)
     wb = load_workbook(output)
     for sheet_name in wb.sheetnames:
@@ -109,25 +108,34 @@ def procesar_csv_web(uploaded_file):
     return final_output.getvalue(), metadata
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(page_title="Procesador VPN CSV", page_icon="📊")
-st.title("🚀 Convertidor CSV VPN a Excel")
-st.write("Sube tu archivo CSV exportado para procesar las sesiones de usuario.")
+st.set_page_config(page_title="Analizador VPN Sophos", page_icon="🛡️")
+st.title("🛡️ Procesador de Reportes VPN Sophos")
+st.write("Sube tu archivo CSV para generar el reporte de conexiones en Excel.")
 
-uploaded_file = st.file_uploader("Elige un archivo CSV", type="csv")
+uploaded_file = st.file_uploader("Arrastra tu archivo CSV aquí", type="csv")
 
 if uploaded_file is not None:
     with st.spinner('Procesando datos...'):
         excel_data, meta = procesar_csv_web(uploaded_file)
         
         if excel_data:
-            serial_map = {"X12507469G6M897": "PMA", "X1250748QM4BY48": "EPE"}
+            # Extraer Serial directamente
             serial = meta.get("Appliance Key", "SIN_SERIAL")
-            label = serial_map.get(serial, serial)
-            fecha = meta.get("Start Date", "Fecha_Desconocida").replace("/", "-")
             
-            filename = f"Reporte_VPN_{label}_{fecha}.xlsx"
+            # Formatear fecha (quitar horas y ceros)
+            fecha_raw = meta.get("Start Date", "Fecha_Desconocida")
+            try:
+                fecha_dt = pd.to_datetime(fecha_raw)
+                fecha_limpia = fecha_dt.strftime("%Y-%m-%d")
+            except:
+                fecha_limpia = str(fecha_raw).split(" ")[0].replace("/", "-")
+            
+            # Nombre final del archivo
+            filename = f"Reporte_VPN_{serial}_{fecha_limpia}.xlsx"
 
-            st.success("✅ ¡Archivo procesado con éxito!")
+            st.success(f"✅ Archivo procesado correctamente.")
+            st.info(f"**Serial:** {serial} | **Fecha:** {fecha_limpia}")
+            
             st.download_button(
                 label="📥 Descargar Reporte Excel",
                 data=excel_data,
@@ -135,4 +143,4 @@ if uploaded_file is not None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.error(f"Error: {meta}")
+            st.error(f"Error al procesar: {meta}")
