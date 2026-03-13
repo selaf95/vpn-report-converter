@@ -97,7 +97,7 @@ if archivo:
         # --- EXCEL (CENTRADO + AUTOAJUSTE) ---
         out_xl = BytesIO()
         with pd.ExcelWriter(out_xl, engine='openpyxl') as writer:
-            df_f.to_excel(writer, index=False, sheet_name='Completadas')
+            df_f.to_excel(writer, index=False, sheet_name='Conexiones Completadas')
             df_a.to_excel(writer, index=False, sheet_name='Conexiones Activas')
             for sheet in writer.sheets:
                 ws = writer.sheets[sheet]
